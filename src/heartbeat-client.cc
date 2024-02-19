@@ -15,6 +15,7 @@
 #include <agrpc/asio_grpc.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
+#include <asio/steady_timer.hpp>
 #include <grpcpp/client_context.h>
 #include <grpcpp/create_channel.h>
 
@@ -49,27 +50,46 @@ int main(int argc, const char** argv) {
         SPDLOG_CRITICAL("Invalid client name");
     }
 
-    grpc::Status status;
-
     heartbeat::Greeter::Stub stub{grpc::CreateChannel(host_port, grpc::InsecureChannelCredentials())};
     agrpc::GrpcContext grpc_context;
 
-    SPDLOG_INFO("Client has name %s, timeout %lld", name, timeout);
+    SPDLOG_INFO("Client has name {}, timeout {}", name, timeout);
+
+    asio::steady_timer timer{grpc_context};
+    auto period = std::chrono::seconds{timeout * 2 / 3};
 
     asio::co_spawn(
         grpc_context,
         [&]() -> asio::awaitable<void>
         {
-            using RPC = AwaitableClientRPC<&heartbeat::Greeter::Stub::PrepareAsyncSayHello>;
-            grpc::ClientContext client_context;
-            heartbeat::HelloRequest request;
-            request.set_name(name);
-            request.set_timeout(timeout);
-            heartbeat::HelloReply response;
-            status = co_await RPC::request(grpc_context, stub, client_context, request, response);
-            SPDLOG_INFO("Count %lld", response.count());
+            do {
+                grpc::Status status;
+                using RPC = AwaitableClientRPC<&heartbeat::Greeter::Stub::PrepareAsyncSayHello>;
+                grpc::ClientContext client_context;
+                heartbeat::HelloRequest request;
+
+                request.set_name(name);
+                request.set_timeout(timeout);
+
+                heartbeat::HelloReply response;
+                SPDLOG_INFO("Sending greetings");
+                status = co_await RPC::request(grpc_context, stub, client_context, request, response);
+
+                if (status.ok()) {
+                    SPDLOG_INFO("Checkin, count {}", response.count());
+                } else {
+                    SPDLOG_ERROR("Failed to send greetings, {}", status.error_message());
+                }
+
+                SPDLOG_INFO("Reschedule in {}s", period.count());
+                timer.expires_after(period);
+                SPDLOG_INFO("Checkin, count {}", response.count());
+                co_await timer.async_wait(asio::use_awaitable);
+            } while (true);
         },
         RethrowFirstArg{});
 
     grpc_context.run();
+
+    return 0;
 }

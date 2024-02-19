@@ -79,35 +79,40 @@ public:
     bool Setup() {
         thread_ = std::thread(
             [this]() {
-                std::chrono::seconds period = std::chrono::seconds::max();
-                std::unique_lock<std::mutex> lk;
+                const auto long_period = std::chrono::seconds{0xffffffffLL};
+                std::chrono::seconds period = long_period;
+                std::unique_lock<std::mutex> lk{mutex_};
                 while (true) {
+                    SPDLOG_INFO("Worker thread waiting for {}s", period.count());
                     bool cv_timeout = !cv_.wait_for(lk, period, [this]() { return status_ != IDLE; });
+                    SPDLOG_INFO("Worker thread wake up, status {}", (int)status_);
                     if (status_ == STOP) {
                         SPDLOG_INFO("Worker thread exits");
                         break;
                     }
 
                     if (!cv_timeout) {
-                        SPDLOG_INFO("Worker thread got a refresh");
+                        SPDLOG_INFO("Worker thread got a kick");
+                    } else {
+                        SPDLOG_INFO("Worker thread period wake up");
                     }
 
                     auto now = std::chrono::steady_clock::now();
-                    std::chrono::seconds new_period = std::chrono::seconds::max();
+                    std::chrono::seconds new_period = long_period;
                     std::vector<std::string> inactive_clients;
                     for (auto &[name, client] : clients_) {
                         auto since = std::chrono::duration_cast<std::chrono::seconds>(now - client.last_active);
                         if (since >= client.timeout) {
-                            SPDLOG_ERROR("Client %s timeout, last active %lld", name, client.LastActive());
+                            SPDLOG_ERROR("Client {} timeout, last active {}", name, client.LastActive());
                             inactive_clients.push_back(name);
                         } else if (client.timeout - since < new_period) {
                             new_period = client.timeout - since;
-                            SPDLOG_INFO("Client %s is about to timeout after %lld", name, new_period.count());
+                            SPDLOG_INFO("Client {} is about to timeout after {}", name, new_period.count());
                         }
                     }
 
                     for (auto &name : inactive_clients) {
-                        SPDLOG_INFO("Erase entry for %s due to timeout", name);
+                        SPDLOG_INFO("Erase entry for {} due to timeout", name);
                         clients_.erase(name);
                     }
 
@@ -116,6 +121,7 @@ public:
                 }
             }
         );
+        status_ = IDLE;
         return true;
     }
 
@@ -126,13 +132,13 @@ public:
             auto &client = clients_[name];
 
             if (client.count == 0) {
-                SPDLOG_INFO("New client %s checkin, timeout %llu", name, timeout);
+                SPDLOG_INFO("New client {} checkin, timeout {}", name, timeout);
             } else {
-                SPDLOG_INFO("Client %s checkin %d times, timeout %llu, last active %lld", name, client.count, timeout, client.LastActive());
+                SPDLOG_INFO("Client {} checkin {} times, timeout {}, last active {}", name, client.count, timeout, client.LastActive());
             }
 
             if (status_ == STOP) {
-                SPDLOG_WARN("Exiting worker thread... ignore client %s", name);
+                SPDLOG_WARN("Exiting worker thread... ignore client {}", name);
                 return count;
             }
             client.Refresh(timeout);
@@ -179,18 +185,22 @@ int main(int argc, const char** argv) {
     Server ctx;
     ctx.Setup();
 
+    SPDLOG_INFO("Server start on {}", host_port);
     using RPC = AwaitableServerRPC<&heartbeat::Greeter::AsyncService::RequestSayHello>;
     agrpc::register_awaitable_rpc_handler<RPC>(
         grpc_context, service,
-        [&server, &ctx](RPC& rpc, RPC::Request& request) -> asio::awaitable<void>
+        [&ctx](RPC& rpc, RPC::Request& request) -> asio::awaitable<void>
         {
             heartbeat::HelloReply response;
             response.set_count(ctx.ProcessClient(request.name(), request.timeout()));
             co_await rpc.finish(response, grpc::Status::OK);
-            server->Shutdown();
         },
         RethrowFirstArg{}
     );
 
     grpc_context.run();
+
+    SPDLOG_INFO("Server exits");
+
+    return 0;
 }
