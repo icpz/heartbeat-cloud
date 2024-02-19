@@ -83,7 +83,6 @@ int main(int argc, const char** argv) {
 
                 SPDLOG_INFO("Reschedule in {}s", period.count());
                 timer.expires_after(period);
-                SPDLOG_INFO("Checkin, count {}", response.count());
                 co_await timer.async_wait(asio::use_awaitable);
             } while (true);
         },

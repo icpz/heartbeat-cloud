@@ -31,6 +31,7 @@
 #include "heartbeat.grpc.pb.h"
 
 #include "common.hh"
+#include "notify.hh"
 
 // begin-snippet: server-side-heartbeat
 // ---------------------------------------------------
@@ -76,7 +77,9 @@ public:
         }
     }
 
-    bool Setup() {
+    bool Setup(std::string notify_prog) {
+        notify_prog_ = std::move(notify_prog);
+
         thread_ = std::thread(
             [this]() {
                 const auto long_period = std::chrono::seconds{0xffffffffLL};
@@ -103,7 +106,7 @@ public:
                     for (auto &[name, client] : clients_) {
                         auto since = std::chrono::duration_cast<std::chrono::seconds>(now - client.last_active);
                         if (since >= client.timeout) {
-                            SPDLOG_ERROR("Client {} timeout, last active {}", name, client.LastActive());
+                            SPDLOG_WARN("Client {} timeout, last active {}", name, client.LastActive());
                             inactive_clients.push_back(name);
                         } else if (client.timeout - since < new_period) {
                             new_period = client.timeout - since;
@@ -112,6 +115,7 @@ public:
                     }
 
                     for (auto &name : inactive_clients) {
+                        NotifyLaunch(notify_prog_, NotifyEvent::EXPIRE, name);
                         SPDLOG_INFO("Erase entry for {} due to timeout", name);
                         clients_.erase(name);
                     }
@@ -133,6 +137,7 @@ public:
 
             if (client.count == 0) {
                 SPDLOG_INFO("New client {} checkin, timeout {}", name, timeout);
+                NotifyLaunch(notify_prog_, NotifyEvent::NEWBIE, name);
             } else {
                 SPDLOG_INFO("Client {} checkin {} times, timeout {}, last active {}", name, client.count, timeout, client.LastActive());
             }
@@ -155,15 +160,18 @@ private:
     std::thread thread_;
     std::mutex mutex_;
     std::condition_variable cv_;
+    std::string notify_prog_;
 };
 
 int main(int argc, const char** argv) {
     spdlog::set_pattern("%^%L %D %T.%f %t %@] %v%$");
     cxxopts::Options options{argv[0]};
     std::string host_port;
+    std::string notify_program;
 
     options.add_options()
         ("L", "Listen address", cxxopts::value(host_port)->default_value("0.0.0.0:50051"))
+        ("S,script", "Notify script", cxxopts::value(notify_program)->default_value(""))
         ("h,help", "Show this help", cxxopts::value<bool>()->default_value("false"));
 
     auto result = options.parse(argc, argv);
@@ -183,9 +191,10 @@ int main(int argc, const char** argv) {
     server = builder.BuildAndStart();
 
     Server ctx;
-    ctx.Setup();
+    ctx.Setup(notify_program);
 
     SPDLOG_INFO("Server start on {}", host_port);
+    NotifyLaunch(notify_program, NotifyEvent::INFO, "Server Started");
     using RPC = AwaitableServerRPC<&heartbeat::Greeter::AsyncService::RequestSayHello>;
     agrpc::register_awaitable_rpc_handler<RPC>(
         grpc_context, service,

@@ -9,7 +9,7 @@ list(APPEND DEPS
     heartbeat_grpc
     )
 
-add_executable(heartbeat-server heartbeat-server.cc)
+add_executable(heartbeat-server heartbeat-server.cc notify.cc)
 target_link_libraries(heartbeat-server ${DEPS})
 
 add_executable(heartbeat-client heartbeat-client.cc)
