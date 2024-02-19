@@ -48,6 +48,7 @@ int main(int argc, const char** argv) {
 
     if (name.empty()) {
         SPDLOG_CRITICAL("Invalid client name");
+        exit(-1);
     }
 
     heartbeat::Greeter::Stub stub{grpc::CreateChannel(host_port, grpc::InsecureChannelCredentials())};
