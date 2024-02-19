@@ -4,3 +4,10 @@
 [submodule "thirdparty/asio"]
 	path = thirdparty/asio
 	url = https://github.com/chriskohlhoff/asio
+[submodule "thirdparty/spdlog"]
+	path = thirdparty/spdlog
+	url = https://github.com/gabime/spdlog
+	branch = v1.x
+[submodule "thirdparty/cxxopts"]
+	path = thirdparty/cxxopts
+	url = https://github.com/jarro2783/cxxopts

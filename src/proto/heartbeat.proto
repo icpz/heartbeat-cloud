@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package heartbeat;
+
+// The greeting service definition.
+service Greeter {
+  // Sends a greeting
+  rpc SayHello(HelloRequest) returns (HelloReply) {}
+}
+
+/*
+ * name:    client name
+ * timeout: client timeout in seconds
+ */
+message HelloRequest {
+  string name = 1;
+  uint64 timeout = 2;
+}
+
+// The response message containing the greetings
+message HelloReply {
+  uint64 count = 1;
+}
