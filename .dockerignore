@@ -1,0 +1,7 @@
+
+*.sw[po]
+*.[oa]
+build/
+compile_commands.json
+.git/
+
