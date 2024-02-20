@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <string>
+#include <future>
 
 enum NotifyEvent {
     INFO,
@@ -10,5 +11,5 @@ enum NotifyEvent {
     EXPIRE,
 };
 
-void NotifyLaunch(const std::filesystem::path &prog, NotifyEvent event, const std::string &arg);
+std::future<void> NotifyLaunch(const std::filesystem::path &prog, NotifyEvent event, const std::string &arg);
 

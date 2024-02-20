@@ -17,6 +17,7 @@
 #include <chrono>
 #include <mutex>
 #include <condition_variable>
+#include <algorithm>
 
 #include <agrpc/asio_grpc.hpp>
 #include <asio/co_spawn.hpp>
@@ -115,10 +116,33 @@ public:
                     }
 
                     for (auto &name : inactive_clients) {
-                        NotifyLaunch(notify_prog_, NotifyEvent::EXPIRE, name);
+                        auto n = NotifyLaunch(notify_prog_, NotifyEvent::EXPIRE, name);
+                        if (n.valid()) {
+                            notify_queue_.emplace_back(std::move(n));
+                        }
                         SPDLOG_INFO("Erase entry for {} due to timeout", name);
                         clients_.erase(name);
                     }
+
+                    SPDLOG_INFO("Recycle notify queue, current size {}", notify_queue_.size());
+                    notify_queue_.erase(
+                        std::remove_if(
+                            notify_queue_.begin(),
+                            notify_queue_.end(),
+                            [](std::future<void> &n) -> bool {
+                                if (!n.valid()) {
+                                    return true;
+                                }
+                                if (n.wait_for(std::chrono::microseconds{0}) == std::future_status::ready) {
+                                    n.get();
+                                    return true;
+                                }
+                                return false;
+                            }
+                        ),
+                        notify_queue_.end()
+                    );
+                    SPDLOG_INFO("Recycle notify queue done, current size {}", notify_queue_.size());
 
                     status_ = IDLE;
                     period = new_period;
@@ -129,6 +153,11 @@ public:
         return true;
     }
 
+    void EnqueueNotify(std::future<void> n) {
+        std::lock_guard<std::mutex> _{mutex_};
+        notify_queue_.emplace_back(std::move(n));
+    }
+
     uint64_t ProcessClient(const std::string &name, uint64_t timeout) {
         uint64_t count = 0;
         {
@@ -137,7 +166,10 @@ public:
 
             if (client.count == 0) {
                 SPDLOG_INFO("New client {} checkin, timeout {}", name, timeout);
-                NotifyLaunch(notify_prog_, NotifyEvent::NEWBIE, name);
+                auto n = NotifyLaunch(notify_prog_, NotifyEvent::NEWBIE, name);
+                if (n.valid()) {
+                    notify_queue_.emplace_back(std::move(n));
+                }
             } else {
                 SPDLOG_INFO("Client {} checkin {} times, timeout {}, last active {}", name, client.count, timeout, client.LastActive());
             }
@@ -161,6 +193,8 @@ private:
     std::mutex mutex_;
     std::condition_variable cv_;
     std::string notify_prog_;
+    std::vector<std::future<void>> notify_queue_;
+
 };
 
 int main(int argc, const char** argv) {
@@ -194,7 +228,10 @@ int main(int argc, const char** argv) {
     ctx.Setup(notify_program);
 
     SPDLOG_INFO("Server start on {}", host_port);
-    NotifyLaunch(notify_program, NotifyEvent::INFO, "Server Started");
+    auto n = NotifyLaunch(notify_program, NotifyEvent::INFO, "Server started");
+    if (n.valid()) {
+        ctx.EnqueueNotify(std::move(n));
+    }
     using RPC = AwaitableServerRPC<&heartbeat::Greeter::AsyncService::RequestSayHello>;
     agrpc::register_awaitable_rpc_handler<RPC>(
         grpc_context, service,
